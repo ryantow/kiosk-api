@@ -35,7 +35,11 @@ app.get('/', (req, res) => {
 
 app.get('/all', async (req, res) => {
   try {
-    const result = await db.query('SELECT * FROM interactions ORDER BY timestamp DESC LIMIT 100');
+    const result = await db.query(' SELECT i.*, k.friendly_name
+      FROM interactions i
+      LEFT JOIN kiosk_locations k ON i.kiosk_id = k.kiosk_id
+      ORDER BY i.timestamp DESC
+      LIMIT 100');
     res.json(result.rows);
   } catch (err) {
     console.error(err);
