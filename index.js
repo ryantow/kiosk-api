@@ -29,5 +29,15 @@ app.get('/', (req, res) => {
   res.send('Kiosk API is running');
 });
 
+app.get('/all', async (req, res) => {
+  try {
+    const result = await db.query('SELECT * FROM interactions ORDER BY timestamp DESC LIMIT 100');
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch logs' });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
