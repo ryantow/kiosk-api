@@ -6,6 +6,10 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
+const cors = require('cors');
+app.use(cors());
+
+
 app.post('/log', async (req, res) => {
   const { screen, action, timestamp, kioskId } = req.body;
 
