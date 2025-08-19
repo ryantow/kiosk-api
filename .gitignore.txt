@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual env
+.venv/
+
+# Local environment configs
+.env
+.env.local
+.env.*
+
+# macOS cruft
+.DS_Store
