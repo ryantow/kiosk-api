@@ -249,19 +249,22 @@ def metrics_by_kiosk_csv(
     date_from: Optional[str] = Query(default=None),
     date_to:   Optional[str] = Query(default=None),
 ):
+    # Join kiosk_locations for kiosk_name; compute avg in seconds directly
     sql = """
         SELECT
-            kiosk_id,
+            s.kiosk_id,
+            k.kiosk_name,
             COUNT(*)                                                    AS started,
-            COUNT(*) FILTER (WHERE completed_at IS NOT NULL)            AS completed,
-            COUNT(*) FILTER (WHERE abandoned_at IS NOT NULL)            AS abandoned,
-            AVG(EXTRACT(EPOCH FROM (COALESCE(completed_at, abandoned_at) - started_at))) * 1000
-                AS avg_ms
-        FROM sessions
-        WHERE (%s::timestamptz IS NULL OR started_at >= %s::timestamptz)
-          AND (%s::timestamptz IS NULL OR started_at <  %s::timestamptz)
-        GROUP BY kiosk_id
-        ORDER BY kiosk_id;
+            COUNT(*) FILTER (WHERE s.completed_at IS NOT NULL)          AS completed,
+            COUNT(*) FILTER (WHERE s.abandoned_at IS NOT NULL)          AS abandoned,
+            AVG(EXTRACT(EPOCH FROM (COALESCE(s.completed_at, s.abandoned_at) - s.started_at)))
+                AS avg_sec
+        FROM sessions s
+        JOIN kiosk_locations k ON k.kiosk_id = s.kiosk_id
+        WHERE (%s::timestamptz IS NULL OR s.started_at >= %s::timestamptz)
+          AND (%s::timestamptz IS NULL OR s.started_at <  %s::timestamptz)
+        GROUP BY s.kiosk_id, k.kiosk_name
+        ORDER BY k.kiosk_name;
     """
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(sql, (date_from, date_from, date_to, date_to))
@@ -269,15 +272,28 @@ def metrics_by_kiosk_csv(
 
     buf = StringIO()
     writer = csv.writer(buf)
-    writer.writerow(["kiosk_id", "started", "completed", "abandoned", "completion_pct", "avg_ms"])
+    # New header includes kiosk_name and avg_sec
+    writer.writerow(["kiosk_id", "kiosk_name", "started", "completed", "abandoned", "completion_pct", "avg_seconds"])
+
     for r in rows:
         started   = int(r["started"] or 0)
         completed = int(r["completed"] or 0)
         abandoned = int(r["abandoned"] or 0)
         pct = (completed / started) if started else 0.0
-        writer.writerow([r["kiosk_id"], started, completed, abandoned, f"{pct:.4f}", r["avg_ms"] or ""])
-    buf.seek(0)
+        avg_seconds = r["avg_sec"] if r["avg_sec"] is not None else ""
+        # If you want 1 decimal place consistently:
+        avg_seconds_fmt = f"{avg_seconds:.1f}" if avg_seconds != "" else ""
+        writer.writerow([
+            r["kiosk_id"],
+            r["kiosk_name"],
+            started,
+            completed,
+            abandoned,
+            f"{pct:.4f}",
+            avg_seconds_fmt
+        ])
 
+    buf.seek(0)
     return StreamingResponse(
         buf,
         media_type="text/csv; charset=utf-8",
