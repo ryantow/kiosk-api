@@ -19,7 +19,7 @@ from psycopg_pool import ConnectionPool
 # -----------------------------
 def resolve_db_url() -> str:
     """
-    Prefer internal when present (Railway API service), else public (local dev), else DATABASE_URL.
+    Prefer internal when present (Railway), else public (local), else DATABASE_URL.
     """
     internal = os.environ.get("DATABASE_URL_INTERNAL")
     public = os.environ.get("DATABASE_URL_PUBLIC")
@@ -33,6 +33,10 @@ DATABASE_URL = resolve_db_url()
 API_KEY = os.environ.get("API_KEY")
 
 def require_api_key(authorization: Optional[str] = Header(None)) -> None:
+    """
+    Simple bearer token check. Set API_KEY env on Railway and your dashboard proxy will attach it.
+    /health remains open.
+    """
     if not API_KEY:
         return  # allow unauth in dev if API_KEY not set
     if not authorization or not authorization.startswith("Bearer "):
@@ -52,9 +56,9 @@ pool = ConnectionPool(
 # -----------------------------
 # FastAPI app
 # -----------------------------
-app = FastAPI(title="Kiosk Sessions API", version="1.0.0")
+app = FastAPI(title="Kiosk Sessions API", version="1.1.0")
 
-# CORS (loose; tighten for production)
+# CORS (loose; tighten for production domains if desired)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -82,6 +86,9 @@ class CompleteSessionIn(BaseModel):
 class AbandonSessionIn(BaseModel):
     session_id: str
 
+class RestartSessionIn(BaseModel):
+    session_id: str
+
 class KioskRow(BaseModel):
     kiosk_id: str
     kiosk_name: str
@@ -91,6 +98,7 @@ class ByKioskRow(BaseModel):
     started: int
     completed: int
     abandoned: int
+    restart_clicks: int
     avg_ms: Optional[float]
 
 class MetricsOverviewOut(BaseModel):
@@ -100,6 +108,8 @@ class MetricsOverviewOut(BaseModel):
     sessions_started: int
     sessions_completed: int
     sessions_abandoned: int
+    restart_clicks: int
+    restart_rate: float
     avg_session_ms: Optional[float]
 
 # -----------------------------
@@ -107,7 +117,7 @@ class MetricsOverviewOut(BaseModel):
 # -----------------------------
 @app.get("/health")
 def health():
-    # DB‑independent health endpoint so Railway sees the service as healthy even if DB is momentarily unavailable
+    # DB-independent health endpoint
     return {"ok": True, "version": app.version}
 
 @app.get("/db/ping", dependencies=[Depends(require_api_key)])
@@ -129,6 +139,7 @@ def list_kiosks(only_active: bool = True):
         cur.execute(sql, (only_active,))
         return cur.fetchall()
 
+# ----- Sessions -----
 @app.post("/session/start", response_model=StartSessionOut, dependencies=[Depends(require_api_key)])
 def start_session(payload: StartSessionIn):
     with pool.connection() as conn, conn.cursor() as cur:
@@ -179,13 +190,30 @@ def abandon_session(payload: AbandonSessionIn):
             raise HTTPException(status_code=404, detail="session_id not found")
         return {"ok": True, "session_id": payload.session_id}
 
+@app.post("/session/restart", dependencies=[Depends(require_api_key)])
+def restart_session(payload: RestartSessionIn):
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE sessions
+            SET restart_clicks = COALESCE(restart_clicks, 0) + 1
+            WHERE session_id = %s
+            RETURNING restart_clicks;
+            """,
+            (payload.session_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="session_id not found")
+        return {"ok": True, "session_id": payload.session_id, "restart_clicks": int(row["restart_clicks"])}
+
+# ----- Metrics: JSON -----
 @app.get("/metrics/overview", response_model=MetricsOverviewOut, dependencies=[Depends(require_api_key)])
 def metrics_overview(
     kiosk_id: Optional[str] = Query(default=None),
     date_from: Optional[str] = Query(default=None, description="ISO date e.g. 2025-08-01"),
-    date_to: Optional[str]   = Query(default=None, description="ISO date (exclusive) e.g. 2025-09-01"),
+    date_to:   Optional[str] = Query(default=None, description="ISO date (exclusive) e.g. 2025-09-01"),
 ):
-    # NOTE: Use completed_at IS NOT NULL rather than a generated 'completed' column for portability.
     sql = """
         WITH base AS (
             SELECT *
@@ -198,6 +226,7 @@ def metrics_overview(
             COUNT(*)                                                    AS sessions_started,
             COUNT(*) FILTER (WHERE completed_at IS NOT NULL)            AS sessions_completed,
             COUNT(*) FILTER (WHERE abandoned_at IS NOT NULL)            AS sessions_abandoned,
+            SUM(COALESCE(restart_clicks,0))                             AS restart_clicks,
             AVG(EXTRACT(EPOCH FROM (COALESCE(completed_at, abandoned_at) - started_at))) * 1000
               AS avg_session_ms
         FROM base;
@@ -206,13 +235,19 @@ def metrics_overview(
         cur.execute(sql, (date_from, date_from, date_to, date_to, kiosk_id, kiosk_id))
         row = cur.fetchone() or {}
 
+    sessions_completed = int(row.get("sessions_completed", 0) or 0)
+    restart_clicks = int(row.get("restart_clicks", 0) or 0)
+    restart_rate = (float(restart_clicks) / float(sessions_completed)) if sessions_completed else 0.0
+
     return {
         "scope": kiosk_id,
         "date_from": date_from,
         "date_to": date_to,
         "sessions_started": int(row.get("sessions_started", 0) or 0),
-        "sessions_completed": int(row.get("sessions_completed", 0) or 0),
+        "sessions_completed": sessions_completed,
         "sessions_abandoned": int(row.get("sessions_abandoned", 0) or 0),
+        "restart_clicks": restart_clicks,
+        "restart_rate": restart_rate,
         "avg_session_ms": float(row.get("avg_session_ms")) if row.get("avg_session_ms") is not None else None,
     }
 
@@ -227,6 +262,7 @@ def metrics_by_kiosk(
             COUNT(*)                                                    AS started,
             COUNT(*) FILTER (WHERE completed_at IS NOT NULL)            AS completed,
             COUNT(*) FILTER (WHERE abandoned_at IS NOT NULL)            AS abandoned,
+            SUM(COALESCE(restart_clicks,0))                             AS restart_clicks,
             AVG(EXTRACT(EPOCH FROM (COALESCE(completed_at, abandoned_at) - started_at))) * 1000
                 AS avg_ms
         FROM sessions
@@ -235,21 +271,17 @@ def metrics_by_kiosk(
         GROUP BY kiosk_id
         ORDER BY kiosk_id;
     """
-    try:
-        with pool.connection() as conn, conn.cursor() as cur:
-            cur.execute(sql, (date_from, date_from, date_to, date_to))
-            rows = cur.fetchall()
-            return rows
-    except Exception as e:
-        # Helpful while stabilizing; consider removing after everything is solid.
-        raise HTTPException(status_code=500, detail=f"/metrics/by-kiosk failed: {type(e).__name__}: {e}")
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, (date_from, date_from, date_to, date_to))
+        rows = cur.fetchall()
+        return rows
 
+# ----- Metrics: CSV -----
 @app.get("/metrics/by-kiosk.csv", dependencies=[Depends(require_api_key)])
 def metrics_by_kiosk_csv(
     date_from: Optional[str] = Query(default=None),
     date_to:   Optional[str] = Query(default=None),
 ):
-    # Join kiosk_locations for kiosk_name; compute avg in seconds directly
     sql = """
         SELECT
             s.kiosk_id,
@@ -257,8 +289,9 @@ def metrics_by_kiosk_csv(
             COUNT(*)                                                    AS started,
             COUNT(*) FILTER (WHERE s.completed_at IS NOT NULL)          AS completed,
             COUNT(*) FILTER (WHERE s.abandoned_at IS NOT NULL)          AS abandoned,
+            SUM(COALESCE(s.restart_clicks,0))                           AS restart_clicks,
             AVG(EXTRACT(EPOCH FROM (COALESCE(s.completed_at, s.abandoned_at) - s.started_at)))
-                AS avg_sec
+              AS avg_sec
         FROM sessions s
         JOIN kiosk_locations k ON k.kiosk_id = s.kiosk_id
         WHERE (%s::timestamptz IS NULL OR s.started_at >= %s::timestamptz)
@@ -272,25 +305,21 @@ def metrics_by_kiosk_csv(
 
     buf = StringIO()
     writer = csv.writer(buf)
-    # New header includes kiosk_name and avg_sec
-    writer.writerow(["kiosk_id", "kiosk_name", "started", "completed", "abandoned", "completion_pct", "avg_seconds"])
-
+    writer.writerow([
+        "kiosk_id","kiosk_name","started","completed","abandoned",
+        "restart_clicks","restart_rate","avg_seconds"
+    ])
     for r in rows:
         started   = int(r["started"] or 0)
         completed = int(r["completed"] or 0)
         abandoned = int(r["abandoned"] or 0)
-        pct = (completed / started) if started else 0.0
-        avg_seconds = r["avg_sec"] if r["avg_sec"] is not None else ""
-        # If you want 1 decimal place consistently:
-        avg_seconds_fmt = f"{avg_seconds:.1f}" if avg_seconds != "" else ""
+        rc        = int(r["restart_clicks"] or 0)
+        rate      = (rc / completed) if completed else 0.0
+        avg_sec   = r["avg_sec"] if r["avg_sec"] is not None else ""
+        avg_fmt   = f"{avg_sec:.1f}" if avg_sec != "" else ""
         writer.writerow([
-            r["kiosk_id"],
-            r["kiosk_name"],
-            started,
-            completed,
-            abandoned,
-            f"{pct:.4f}",
-            avg_seconds_fmt
+            r["kiosk_id"], r["kiosk_name"], started, completed, abandoned,
+            rc, f"{rate:.4f}", avg_fmt
         ])
 
     buf.seek(0)
@@ -301,7 +330,7 @@ def metrics_by_kiosk_csv(
     )
 
 # -----------------------------
-# Local entrypoint (Railway uses $PORT)
+# Local entrypoint (Railway sets $PORT)
 # -----------------------------
 if __name__ == "__main__":
     import uvicorn
