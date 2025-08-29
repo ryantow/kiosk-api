@@ -213,9 +213,13 @@ def restart_session(payload: RestartSessionIn):
             raise HTTPException(status_code=404, detail="session_id not found")
         return {"ok": True, "session_id": payload.session_id, "restart_clicks": int(row["restart_clicks"])}
 
+from fastapi.responses import JSONResponse
+import logging
+logger = logging.getLogger("uvicorn.error")
+
 @app.post("/session/restart_click")
 def restart_click(payload: RestartClickPayload):
-    sid = normalize_session_id(payload.session_id)  # 32-char, no dashes, upper
+    sid = normalize_session_id(payload.session_id)  # 32-char, no dashes, UPPER
     if not sid:
         raise HTTPException(status_code=400, detail="session_id required")
 
@@ -226,20 +230,24 @@ def restart_click(payload: RestartClickPayload):
        RETURNING restart_clicks;
     """
 
+    pool = getattr(app.state, "pool", None)
+    if pool is None:
+        return JSONResponse(status_code=500, content={"error": "db_pool_missing"})
+
     try:
-        # ⬇️ same pattern you use elsewhere in this file
-        with app.state.pool.connection() as conn:
+        # 🔒 match your other routes: psycopg2 pool -> .connection() + cursor()
+        with pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (sid,))
                 row = cur.fetchone()
                 conn.commit()
-    except Exception:
-        raise HTTPException(status_code=500, detail="server_error")
-
-    if not row:
-        raise HTTPException(status_code=404, detail="session not found")
-
-    return {"ok": True, "restart_clicks": row[0]}
+        if not row:
+            return JSONResponse(status_code=404, content={"error": "session_not_found"})
+        return {"ok": True, "restart_clicks": row[0]}
+    except Exception as e:
+        # Log full stack to Railway logs AND return detail (temporarily) to your curl
+        logger.exception("restart_click failed for sid=%s", sid)
+        return JSONResponse(status_code=500, content={"error": "server_error", "detail": str(e)})
 
 # ----- Metrics: JSON -----
 @app.get("/metrics/overview", response_model=MetricsOverviewOut, dependencies=[Depends(require_api_key)])
