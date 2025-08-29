@@ -214,28 +214,32 @@ def restart_session(payload: RestartSessionIn):
         return {"ok": True, "session_id": payload.session_id, "restart_clicks": int(row["restart_clicks"])}
 
 @app.post("/session/restart_click")
-async def restart_click(payload: RestartClickPayload):
-    sid = normalize_session_id(payload.session_id)  # 32-char, no dashes, UPPER
+def restart_click(payload: RestartClickPayload):
+    sid = normalize_session_id(payload.session_id)  # 32-char, no dashes, upper
     if not sid:
         raise HTTPException(status_code=400, detail="session_id required")
 
     sql = """
       UPDATE sessions
          SET restart_clicks = COALESCE(restart_clicks, 0) + 1
-       WHERE REPLACE(UPPER(session_id::text), '-', '') = $1
+       WHERE REPLACE(UPPER(session_id::text), '-', '') = %s
        RETURNING restart_clicks;
     """
 
     try:
-        async with app.state.pool.acquire() as conn:  # same pattern as /session/start
-            row = await conn.fetchrow(sql, sid)
+        # ⬇️ same pattern you use elsewhere in this file
+        with app.state.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, (sid,))
+                row = cur.fetchone()
+                conn.commit()
     except Exception:
         raise HTTPException(status_code=500, detail="server_error")
 
     if not row:
         raise HTTPException(status_code=404, detail="session not found")
 
-    return {"ok": True, "restart_clicks": row["restart_clicks"]}
+    return {"ok": True, "restart_clicks": row[0]}
 
 # ----- Metrics: JSON -----
 @app.get("/metrics/overview", response_model=MetricsOverviewOut, dependencies=[Depends(require_api_key)])
