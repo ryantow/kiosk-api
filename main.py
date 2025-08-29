@@ -14,6 +14,12 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+def normalize_session_id(s: str) -> str:
+    return (s or "").replace("-", "").upper()
+
+class RestartClickPayload(BaseModel):
+    session_id: str
+
 # -----------------------------
 # Config & helpers
 # -----------------------------
@@ -206,6 +212,31 @@ def restart_session(payload: RestartSessionIn):
         if row is None:
             raise HTTPException(status_code=404, detail="session_id not found")
         return {"ok": True, "session_id": payload.session_id, "restart_clicks": int(row["restart_clicks"])}
+
+@app.post("/session/restart_click")
+async def restart_click(payload: RestartClickPayload):
+    sid = normalize_session_id(payload.session_id)
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id required")
+
+    sql = """
+      UPDATE sessions
+         SET restart_clicks = COALESCE(restart_clicks, 0) + 1,
+             updated_at = NOW()
+       WHERE REPLACE(UPPER(session_id), '-', '') = $1
+       RETURNING restart_clicks;
+    """
+
+    try:
+        async with app.state.pool.acquire() as conn:  # <-- use the SAME pool/conn style you use in /session/start
+            row = await conn.fetchrow(sql, sid)
+    except Exception:
+        raise HTTPException(status_code=500, detail="server_error")
+
+    if not row:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    return {"ok": True, "restart_clicks": row["restart_clicks"]}
 
 # ----- Metrics: JSON -----
 @app.get("/metrics/overview", response_model=MetricsOverviewOut, dependencies=[Depends(require_api_key)])
