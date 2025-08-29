@@ -196,9 +196,44 @@ def abandon_session(payload: AbandonSessionIn):
             raise HTTPException(status_code=404, detail="session_id not found")
         return {"ok": True, "session_id": payload.session_id}
 
+from fastapi import FastAPI, Depends, HTTPException, Header
+from pydantic import BaseModel
+import os, re
+import psycopg
+from psycopg_pool import ConnectionPool
+from psycopg.rows import dict_row
+
+app = FastAPI()
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL not set")
+
+# psycopg v3 connection pool
+pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=5, open=True)
+
+# Simple API key guard (expects header: x-api-key)
+def require_api_key(x_api_key: str | None = Header(default=None)):
+    expected = os.environ.get("API_KEY")
+    if expected and x_api_key != expected:
+        raise HTTPException(status_code=401, detail="invalid api key")
+
+# Normalize to 32 hex (no dashes, uppercase)
+def normalize_session_id(raw: str | None):
+    if not raw:
+        return None
+    s = re.sub(r"[^A-Fa-f0-9]", "", raw).upper()
+    return s if len(s) == 32 else None
+
+class RestartSessionIn(BaseModel):
+    session_id: str
+
+class RestartClickPayload(BaseModel):
+    session_id: str
+
 @app.post("/session/restart", dependencies=[Depends(require_api_key)])
 def restart_session(payload: RestartSessionIn):
-    with pool.connection() as conn, conn.cursor() as cur:
+    with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
             UPDATE sessions
@@ -231,7 +266,7 @@ def restart_click(payload: RestartClickPayload):
     """
 
     # Use the same ConnectionPool pattern as other routes in this file
-    with pool.connection() as conn, conn.cursor() as cur:
+    with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, (sid,))
         row = cur.fetchone()
         conn.commit()
@@ -239,7 +274,7 @@ def restart_click(payload: RestartClickPayload):
     if row is None:
         raise HTTPException(status_code=404, detail="session not found")
 
-    return {"ok": True, "restart_clicks": int(row["restart_clicks"]) }
+    return {"ok": True, "restart_clicks": int(row["restart_clicks"])}
 
 # ----- Metrics: JSON -----
 @app.get("/metrics/overview", response_model=MetricsOverviewOut, dependencies=[Depends(require_api_key)])
