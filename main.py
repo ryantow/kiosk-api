@@ -230,24 +230,16 @@ def restart_click(payload: RestartClickPayload):
        RETURNING restart_clicks;
     """
 
-    pool = getattr(app.state, "pool", None)
-    if pool is None:
-        return JSONResponse(status_code=500, content={"error": "db_pool_missing"})
+    # Use the same ConnectionPool pattern as other routes in this file
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute(sql, (sid,))
+        row = cur.fetchone()
+        conn.commit()
 
-    try:
-        # 🔒 match your other routes: psycopg2 pool -> .connection() + cursor()
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (sid,))
-                row = cur.fetchone()
-                conn.commit()
-        if not row:
-            return JSONResponse(status_code=404, content={"error": "session_not_found"})
-        return {"ok": True, "restart_clicks": row[0]}
-    except Exception as e:
-        # Log full stack to Railway logs AND return detail (temporarily) to your curl
-        logger.exception("restart_click failed for sid=%s", sid)
-        return JSONResponse(status_code=500, content={"error": "server_error", "detail": str(e)})
+    if row is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    return {"ok": True, "restart_clicks": int(row["restart_clicks"]) }
 
 # ----- Metrics: JSON -----
 @app.get("/metrics/overview", response_model=MetricsOverviewOut, dependencies=[Depends(require_api_key)])
