@@ -204,7 +204,6 @@ def restart_session(payload: RestartSessionIn):
             UPDATE sessions
             SET restart_clicks = COALESCE(restart_clicks, 0) + 1
             WHERE session_id = %s
-              AND completed_at IS NULL
               AND abandoned_at IS NULL
             RETURNING restart_clicks;
             """,
@@ -225,7 +224,6 @@ def restart_click(payload: RestartClickPayload):
       UPDATE sessions
          SET restart_clicks = COALESCE(restart_clicks, 0) + 1
        WHERE REPLACE(UPPER(session_id::text), '-', '') = %s
-         AND completed_at IS NULL
          AND abandoned_at IS NULL
        RETURNING restart_clicks;
     """
