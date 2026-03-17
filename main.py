@@ -82,6 +82,8 @@ class CompleteSessionIn(BaseModel):
 
 class AbandonSessionIn(BaseModel):
     session_id: str
+    client_ms: Optional[int] = None
+    meta: Optional[Dict[str, Any]] = None
 
 class RestartSessionIn(BaseModel):
     session_id: str
@@ -97,6 +99,8 @@ class ByKioskRow(BaseModel):
     abandoned: int
     restart_clicks: int
     avg_ms: Optional[float]
+    avg_completed_ms: Optional[float] = None
+    avg_abandoned_ms: Optional[float] = None
     # --- Dynamic Metrics ---
     avg_map_time_sec: Optional[float] = None
     avg_poi_popups_completed: Optional[float] = None
@@ -117,6 +121,8 @@ class MetricsOverviewOut(BaseModel):
     restart_clicks: int
     restart_rate: float
     avg_session_ms: Optional[float]
+    avg_completed_ms: Optional[float] = None
+    avg_abandoned_ms: Optional[float] = None
     # --- Dynamic Metrics ---
     avg_map_time_sec: Optional[float] = None
     avg_poi_popups_completed: Optional[float] = None
@@ -155,7 +161,6 @@ def list_kiosks(only_active: bool = True):
 @app.post("/session/start", response_model=StartSessionOut, dependencies=[Depends(require_api_key)])
 def start_session(payload: StartSessionIn):
     with pool.connection() as conn, conn.cursor() as cur:
-        # validate kiosk (source ID)
         cur.execute("SELECT 1 FROM kiosk_locations WHERE kiosk_id = %s;", (payload.kiosk_id,))
         if cur.fetchone() is None:
             raise HTTPException(status_code=400, detail="Unknown kiosk_id / source_id")
@@ -194,8 +199,15 @@ def complete_session(payload: CompleteSessionIn):
 def abandon_session(payload: AbandonSessionIn):
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute(
-            "UPDATE sessions SET abandoned_at = NOW() WHERE session_id = %s RETURNING session_id;",
-            (payload.session_id,),
+            """
+            UPDATE sessions 
+            SET abandoned_at = NOW(),
+                client_ms    = COALESCE(%s, client_ms),
+                meta         = COALESCE(%s, meta)
+            WHERE session_id = %s 
+            RETURNING session_id;
+            """,
+            (payload.client_ms, json.dumps(payload.meta) if payload.meta else None, payload.session_id),
         )
         row = cur.fetchone()
         if row is None:
@@ -251,6 +263,9 @@ def metrics_overview(
             COUNT(*) FILTER (WHERE abandoned_at IS NOT NULL) AS sessions_abandoned,
             SUM(COALESCE(restart_clicks,0)) AS restart_clicks,
             AVG(EXTRACT(EPOCH FROM (COALESCE(completed_at, abandoned_at) - started_at))) * 1000 AS avg_session_ms,
+
+            AVG(client_ms) FILTER (WHERE completed_at IS NOT NULL) AS avg_completed_ms,
+            AVG(client_ms) FILTER (WHERE abandoned_at IS NOT NULL) AS avg_abandoned_ms,
             
             AVG((m->>'map_time_sec')::numeric) FILTER (WHERE completed_at IS NOT NULL) AS avg_map_time_sec,
             AVG((m->>'poi_popups')::numeric) FILTER (WHERE completed_at IS NOT NULL) AS avg_poi_popups_completed,
@@ -284,6 +299,8 @@ def metrics_overview(
         "restart_clicks": restart_clicks,
         "restart_rate": restart_rate,
         "avg_session_ms": float(row.get("avg_session_ms")) if row.get("avg_session_ms") is not None else None,
+        "avg_completed_ms": float(row.get("avg_completed_ms")) if row.get("avg_completed_ms") is not None else None,
+        "avg_abandoned_ms": float(row.get("avg_abandoned_ms")) if row.get("avg_abandoned_ms") is not None else None,
         "avg_map_time_sec": float(row.get("avg_map_time_sec")) if row.get("avg_map_time_sec") is not None else None,
         "avg_poi_popups_completed": float(row.get("avg_poi_popups_completed")) if row.get("avg_poi_popups_completed") is not None else None,
         "avg_poi_popups_abandoned": float(row.get("avg_poi_popups_abandoned")) if row.get("avg_poi_popups_abandoned") is not None else None,
@@ -309,6 +326,9 @@ def metrics_by_kiosk(
             SUM(COALESCE(restart_clicks,0)) AS restart_clicks,
             AVG(EXTRACT(EPOCH FROM (COALESCE(completed_at, abandoned_at) - started_at))) * 1000 AS avg_ms,
             
+            AVG(client_ms) FILTER (WHERE completed_at IS NOT NULL) AS avg_completed_ms,
+            AVG(client_ms) FILTER (WHERE abandoned_at IS NOT NULL) AS avg_abandoned_ms,
+            
             AVG((meta::jsonb->>'map_time_sec')::numeric) FILTER (WHERE completed_at IS NOT NULL) AS avg_map_time_sec,
             AVG((meta::jsonb->>'poi_popups')::numeric) FILTER (WHERE completed_at IS NOT NULL) AS avg_poi_popups_completed,
             AVG((meta::jsonb->>'poi_popups')::numeric) FILTER (WHERE abandoned_at IS NOT NULL) AS avg_poi_popups_abandoned,
@@ -328,7 +348,6 @@ def metrics_by_kiosk(
         cur.execute(sql, (date_from, date_from, date_to, date_to, like_pattern, like_pattern))
         rows = cur.fetchall()
 
-    # Process POI dictionaries dynamically
     for r in rows:
         poi_dict = {}
         if r.get("raw_poi_clicks"):
@@ -350,7 +369,6 @@ def metrics_by_kiosk_csv(
 ):
     like_pattern = f"{experience}_%" if experience else None
 
-    # CSV query keeps it simple for now, but you can easily add the dynamic columns here too if you want them in the export
     sql = """
         SELECT
             s.kiosk_id,
