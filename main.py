@@ -106,6 +106,8 @@ class ByKioskRow(BaseModel):
     abandoned: int
     restart_clicks: int
     avg_ms: Optional[float]
+    download_app_clicks: Optional[int] = None
+    click_location_clicks: Optional[int] = None
 
 class MetricsOverviewOut(BaseModel):
     scope: Optional[str] = None
@@ -117,6 +119,8 @@ class MetricsOverviewOut(BaseModel):
     restart_clicks: int
     restart_rate: float
     avg_session_ms: Optional[float]
+    download_app_clicks: Optional[int] = None
+    click_location_clicks: Optional[int] = None
 
 # -----------------------------
 # Routes
@@ -228,7 +232,6 @@ def restart_click(payload: RestartClickPayload):
        RETURNING restart_clicks;
     """
 
-    # Use the same ConnectionPool pattern as other routes in this file
     with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
         cur.execute(sql, (sid,))
         row = cur.fetchone()
@@ -260,7 +263,9 @@ def metrics_overview(
             COUNT(*) FILTER (WHERE abandoned_at IS NOT NULL)            AS sessions_abandoned,
             SUM(COALESCE(restart_clicks,0))                             AS restart_clicks,
             AVG(EXTRACT(EPOCH FROM (COALESCE(completed_at, abandoned_at) - started_at))) * 1000
-              AS avg_session_ms
+              AS avg_session_ms,
+            SUM((meta->>'download_app_clicks')::numeric)                AS download_app_clicks,
+            SUM((meta->>'click_location_clicks')::numeric)              AS click_location_clicks
         FROM base;
     """
     with pool.connection() as conn, conn.cursor() as cur:
@@ -281,6 +286,8 @@ def metrics_overview(
         "restart_clicks": restart_clicks,
         "restart_rate": restart_rate,
         "avg_session_ms": float(row.get("avg_session_ms")) if row.get("avg_session_ms") is not None else None,
+        "download_app_clicks": int(row.get("download_app_clicks") or 0),
+        "click_location_clicks": int(row.get("click_location_clicks") or 0),
     }
 
 @app.get("/metrics/by-kiosk", response_model=List[ByKioskRow], dependencies=[Depends(require_api_key)])
@@ -296,7 +303,9 @@ def metrics_by_kiosk(
             COUNT(*) FILTER (WHERE abandoned_at IS NOT NULL)            AS abandoned,
             SUM(COALESCE(restart_clicks,0))                             AS restart_clicks,
             AVG(EXTRACT(EPOCH FROM (COALESCE(completed_at, abandoned_at) - started_at))) * 1000
-                AS avg_ms
+                AS avg_ms,
+            SUM((meta->>'download_app_clicks')::numeric)                AS download_app_clicks,
+            SUM((meta->>'click_location_clicks')::numeric)              AS click_location_clicks
         FROM sessions
         WHERE (%s::timestamptz IS NULL OR started_at >= %s::timestamptz)
           AND (%s::timestamptz IS NULL OR started_at <  %s::timestamptz)
