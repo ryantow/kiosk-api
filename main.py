@@ -258,7 +258,7 @@ def metrics_by_kiosk(
             SUM((meta->>'click_location_clicks')::numeric) AS click_location_clicks,
             SUM((meta->>'back_to_map_clicks')::numeric) AS back_to_map_sessions,
             AVG((meta->>'easter_eggs')::numeric) AS avg_easter_eggs,
-            AVG((meta->>'average_depth')::numeric) AS avg_screen_depth,
+            AVG((meta->>'screenindex')::numeric) AS avg_screen_depth,
             SUM((meta->'poi_clicks'->>'Priority Pass')::numeric) AS poi_1,
             SUM((meta->'poi_clicks'->>'Barcode Booth')::numeric) AS poi_2,
             SUM((meta->'poi_clicks'->>'Support Spotlight')::numeric) AS poi_3,
