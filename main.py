@@ -68,79 +68,83 @@ app.add_middleware(
 # Models
 # -----------------------------
 class StartSessionIn(BaseModel):
-    kiosk_id: str = Field(..., description="e.g., wallet_MOA")
+    kiosk_id: str
+    session_id: str  # <--- Now required from Unreal
     app_version: Optional[str] = None
-
-class StartSessionOut(BaseModel):
-    session_id: str
-    started_at: datetime
 
 class CompleteSessionIn(BaseModel):
     session_id: str
+    kiosk_id: str    # <--- Added so the server knows where to assign offline data
     client_ms: Optional[int] = None
     meta: Optional[Dict[str, Any]] = None
 
 class AbandonSessionIn(BaseModel):
     session_id: str
+    kiosk_id: str    # <--- Added so the server knows where to assign offline data
     client_ms: Optional[int] = None
     meta: Optional[Dict[str, Any]] = None
 
 class RestartSessionIn(BaseModel):
     session_id: str
 
-class KioskRow(BaseModel):
-    kiosk_id: str
-    kiosk_name: str
-
-class ByKioskRow(BaseModel):
-    kiosk_id: str
-    started: int
-    completed: int
-    abandoned: int
-    restart_clicks: int
-    avg_completed_ms: Optional[float] = None
-    avg_abandoned_ms: Optional[float] = None
-    download_app_clicks: Optional[int] = None
-    click_location_clicks: Optional[int] = None
-    back_to_map_sessions: Optional[int] = None
-    avg_easter_eggs: Optional[float] = None
-    poi_clicks: Optional[Dict[str, int]] = None
-
-class MetricsOverviewOut(BaseModel):
-    scope: Optional[str] = None
-    date_from: Optional[str] = None
-    date_to: Optional[str] = None
-    sessions_started: int
-    sessions_completed: int
-    sessions_abandoned: int
-    restart_clicks: int
-    restart_rate: float
-    avg_completed_ms: Optional[float] = None
-    avg_abandoned_ms: Optional[float] = None
-    download_app_clicks: Optional[int] = None
-    click_location_clicks: Optional[int] = None
-    back_to_map_sessions: Optional[int] = None
-    avg_easter_eggs: Optional[float] = None
-    poi_clicks: Optional[Dict[str, int]] = None
-
 # -----------------------------
-# Routes
+# Routes (The Upserts)
 # -----------------------------
-@app.get("/health")
-def health():
-    return {"ok": True, "version": app.version}
-
-@app.get("/kiosks", response_model=List[KioskRow], dependencies=[Depends(require_api_key)])
-def list_kiosks(only_active: bool = True):
-    sql = """
-        SELECT kiosk_id, kiosk_name
-        FROM kiosk_locations
-        WHERE (%s::bool IS FALSE) OR (is_active = TRUE)
-        ORDER BY kiosk_name;
-    """
+@app.post("/session/start", dependencies=[Depends(require_api_key)])
+def start_session(payload: StartSessionIn):
     with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(sql, (only_active,))
-        return cur.fetchall()
+        # Check if kiosk exists
+        cur.execute("SELECT 1 FROM kiosk_locations WHERE kiosk_id = %s;", (payload.kiosk_id,))
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=400, detail="Unknown kiosk_id")
+
+        # Insert, or do nothing if the GUID already made it
+        cur.execute(
+            """
+            INSERT INTO sessions (session_id, kiosk_id, app_version)
+            VALUES (%s, %s, %s)
+            ON CONFLICT (session_id) DO NOTHING
+            RETURNING session_id, started_at;
+            """,
+            (payload.session_id, payload.kiosk_id, payload.app_version),
+        )
+        return {"ok": True, "session_id": payload.session_id}
+
+@app.post("/session/complete", dependencies=[Depends(require_api_key)])
+def complete_session(payload: CompleteSessionIn):
+    with pool.connection() as conn, conn.cursor() as cur:
+        # The Upsert: Update if exists, Insert if offline Start was missed
+        cur.execute(
+            """
+            INSERT INTO sessions (session_id, kiosk_id, completed_at, client_ms, meta)
+            VALUES (%s, %s, NOW(), %s, %s)
+            ON CONFLICT (session_id) DO UPDATE 
+            SET completed_at = EXCLUDED.completed_at,
+                client_ms    = COALESCE(EXCLUDED.client_ms, sessions.client_ms),
+                meta         = COALESCE(EXCLUDED.meta, sessions.meta)
+            RETURNING session_id;
+            """,
+            (payload.session_id, payload.kiosk_id, payload.client_ms, json.dumps(payload.meta) if payload.meta else None),
+        )
+        return {"ok": True, "session_id": payload.session_id}
+
+@app.post("/session/abandon", dependencies=[Depends(require_api_key)])
+def abandon_session(payload: AbandonSessionIn):
+    with pool.connection() as conn, conn.cursor() as cur:
+        # The Upsert: Update if exists, Insert if offline Start was missed
+        cur.execute(
+            """
+            INSERT INTO sessions (session_id, kiosk_id, abandoned_at, client_ms, meta)
+            VALUES (%s, %s, NOW(), %s, %s)
+            ON CONFLICT (session_id) DO UPDATE 
+            SET abandoned_at = EXCLUDED.abandoned_at,
+                client_ms    = COALESCE(EXCLUDED.client_ms, sessions.client_ms),
+                meta         = COALESCE(EXCLUDED.meta, sessions.meta)
+            RETURNING session_id;
+            """,
+            (payload.session_id, payload.kiosk_id, payload.client_ms, json.dumps(payload.meta) if payload.meta else None),
+        )
+        return {"ok": True, "session_id": payload.session_id}
 
 # ----- Sessions -----
 @app.post("/session/start", response_model=StartSessionOut, dependencies=[Depends(require_api_key)])
