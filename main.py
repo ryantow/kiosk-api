@@ -221,6 +221,14 @@ def restart_session(payload: RestartSessionIn):
             raise HTTPException(status_code=404, detail="session_id not found")
         return {"ok": True, "session_id": payload.session_id, "restart_clicks": int(row["restart_clicks"])}
 
+# ------ Kiosks endpoint ------
+@app.get("/kiosks", dependencies=[Depends(require_api_key)])
+def get_kiosks():
+    with pool.connection() as conn, conn.cursor() as cur:
+        cur.execute("SELECT kiosk_id, kiosk_name FROM kiosk_locations ORDER BY kiosk_name;")
+        return cur.fetchall()
+
+
 # ----- Metrics -----
 @app.get("/metrics/overview", dependencies=[Depends(require_api_key)])
 def metrics_overview(
@@ -341,7 +349,7 @@ def metrics_by_kiosk(
                 "click_location_clicks": int(r.get("click_location_clicks") or 0),
                 "back_to_map_sessions": int(r.get("back_to_map_sessions") or 0),
                 "avg_easter_eggs": float(r.get("avg_easter_eggs")) if r.get("avg_easter_eggs") else None,
-                "avg_screen_depth": float(row.get("avg_screen_depth")) if row.get("avg_screen_depth") else None,
+                "avg_screen_depth": float(r.get("avg_screen_depth")) if row.get("avg_screen_depth") else None,
                 "poi_clicks": {
                     "Priority Pass": int(r.get("poi_1") or 0),
                     "Barcode Booth": int(r.get("poi_2") or 0),
