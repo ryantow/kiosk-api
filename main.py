@@ -222,7 +222,7 @@ def restart_session(payload: RestartSessionIn):
         return {"ok": True, "session_id": payload.session_id, "restart_clicks": int(row["restart_clicks"])}
 
 # ----- Metrics -----
-@app.get("/metrics/overview", response_model=MetricsOverviewOut, dependencies=[Depends(require_api_key)])
+@app.get("/metrics/overview", dependencies=[Depends(require_api_key)])
 def metrics_overview(
     kiosk_id: Optional[str] = Query(default=None),
     date_from: Optional[str] = Query(default=None),
@@ -288,7 +288,7 @@ def metrics_overview(
         "poi_clicks": poi_clicks
     }
 
-@app.get("/metrics/by-kiosk", response_model=List[ByKioskRow], dependencies=[Depends(require_api_key)])
+@app.get("/metrics/by-kiosk", dependencies=[Depends(require_api_key)])
 def metrics_by_kiosk(
     date_from: Optional[str] = Query(default=None),
     date_to:   Optional[str] = Query(default=None),
