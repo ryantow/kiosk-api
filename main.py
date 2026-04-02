@@ -274,17 +274,11 @@ def metrics_by_kiosk(
         cur.execute(sql, (date_from, date_from, date_to, date_to))
         rows = cur.fetchall()
         
-        result = []
-        for r in rows:
-            sessions_completed = int(r.get("completed", 0) or 0)
-            restart_clicks = int(r.get("restart_clicks", 0) or 0)
-            restart_rate = (float(restart_clicks) / float(sessions_completed)) if sessions_completed else 0.0
-
-            result.append({
+        result.append({
                 "kiosk_id": r.get("kiosk_id"),
-                "sessions_started": int(r.get("started", 0) or 0),
-                "sessions_completed": sessions_completed,
-                "sessions_abandoned": int(r.get("abandoned", 0) or 0),
+                "started": int(r.get("started", 0) or 0),           # Fixed label
+                "completed": sessions_completed,                    # Fixed label
+                "abandoned": int(r.get("abandoned", 0) or 0),       # Fixed label
                 "restart_clicks": restart_clicks,
                 "restart_rate": restart_rate,
                 "avg_completed_ms": float(r.get("avg_completed_ms")) if r.get("avg_completed_ms") else None,
@@ -293,7 +287,7 @@ def metrics_by_kiosk(
                 "click_location_clicks": int(r.get("click_location_clicks") or 0),
                 "back_to_map_sessions": int(r.get("back_to_map_sessions") or 0),
                 "avg_easter_eggs": float(r.get("avg_easter_eggs")) if r.get("avg_easter_eggs") else None,
-                "avg_screen_depth": float(r.get("avg_screen_depth")) if r.get("avg_screen_depth") else None,
+                "avg_abandoned_screen_depth": float(r.get("avg_screen_depth")) if r.get("avg_screen_depth") else None, # Fixed label
                 "poi_clicks": {
                     "Priority Pass": int(r.get("poi_1") or 0),
                     "Barcode Booth": int(r.get("poi_2") or 0),
