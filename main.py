@@ -146,81 +146,21 @@ def abandon_session(payload: AbandonSessionIn):
         )
         return {"ok": True, "session_id": payload.session_id}
 
-# ----- Sessions -----
-@app.post("/session/start", dependencies=[Depends(require_api_key)])
-def start_session(payload: StartSessionIn):
+@app.post("/session/restart", dependencies=[Depends(require_api_key)])
+def restart_session(payload: RestartSessionIn):
     with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM kiosk_locations WHERE kiosk_id = %s;", (payload.kiosk_id,))
-        if cur.fetchone() is None:
-            raise HTTPException(status_code=400, detail="Unknown kiosk_id")
-
-        cur.execute(
-            """
-            INSERT INTO sessions (kiosk_id, app_version)
-            VALUES (%s, %s)
-            RETURNING session_id, started_at;
-            """,
-            (payload.kiosk_id, payload.app_version),
-        )
-        row = cur.fetchone()
-        return {"session_id": str(row["session_id"]), "started_at": row["started_at"]}
-
-@app.post("/session/complete", dependencies=[Depends(require_api_key)])
-def complete_session(payload: CompleteSessionIn):
-    with pool.connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE sessions
-            SET completed_at = NOW(),
-                client_ms   = COALESCE(%s, client_ms),
-                meta        = COALESCE(%s, meta)
-            WHERE session_id = %s
-            RETURNING session_id;
-            """,
-            (payload.client_ms, json.dumps(payload.meta) if payload.meta else None, payload.session_id),
-        )
-        row = cur.fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="session_id not found")
-        return {"ok": True, "session_id": payload.session_id}
-
-@app.post("/session/abandon", dependencies=[Depends(require_api_key)])
-def abandon_session(payload: AbandonSessionIn):
-    with pool.connection() as conn, conn.cursor() as cur:
+        # Increment the restart counter for this specific session
         cur.execute(
             """
             UPDATE sessions 
-            SET abandoned_at = NOW(),
-                client_ms   = COALESCE(%s, client_ms),
-                meta        = COALESCE(%s, meta)
-            WHERE session_id = %s 
-            RETURNING session_id;
-            """,
-            (payload.client_ms, json.dumps(payload.meta) if payload.meta else None, payload.session_id),
-        )
-        row = cur.fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="session_id not found")
-        return {"ok": True, "session_id": payload.session_id}
-
-@app.post("/session/restart", dependencies=[Depends(require_api_key)])
-def restart_session(payload: RestartSessionIn):
-    with pool.connection() as conn, conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            """
-            UPDATE sessions
             SET restart_clicks = COALESCE(restart_clicks, 0) + 1
             WHERE session_id = %s
-              AND abandoned_at IS NULL
-            RETURNING restart_clicks;
+            RETURNING session_id;
             """,
-            (payload.session_id,),
+            (payload.session_id,)
         )
-        row = cur.fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="session_id not found")
-        return {"ok": True, "session_id": payload.session_id, "restart_clicks": int(row["restart_clicks"])}
-
+        return {"ok": True, "session_id": payload.session_id}
+        
 # ------ Kiosks endpoint ------
 @app.get("/kiosks", dependencies=[Depends(require_api_key)])
 def get_kiosks():
@@ -349,7 +289,7 @@ def metrics_by_kiosk(
                 "click_location_clicks": int(r.get("click_location_clicks") or 0),
                 "back_to_map_sessions": int(r.get("back_to_map_sessions") or 0),
                 "avg_easter_eggs": float(r.get("avg_easter_eggs")) if r.get("avg_easter_eggs") else None,
-                "avg_screen_depth": float(r.get("avg_screen_depth")) if row.get("avg_screen_depth") else None,
+                "avg_screen_depth": float(r.get("avg_screen_depth")) if r.get("avg_screen_depth") else None,
                 "poi_clicks": {
                     "Priority Pass": int(r.get("poi_1") or 0),
                     "Barcode Booth": int(r.get("poi_2") or 0),
