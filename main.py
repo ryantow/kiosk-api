@@ -274,20 +274,30 @@ def metrics_by_kiosk(
         cur.execute(sql, (date_from, date_from, date_to, date_to))
         rows = cur.fetchall()
         
-        result.append({
+        result = []
+        for r in rows:
+            # Safely extract and cast our baseline variables
+            sessions_started = int(r.get("started") or 0)
+            sessions_completed = int(r.get("completed") or 0)
+            sessions_abandoned = int(r.get("abandoned") or 0)
+            restart_clicks = int(r.get("restart_clicks") or 0)
+            restart_rate = (float(restart_clicks) / float(sessions_completed)) if sessions_completed > 0 else 0.0
+
+            result.append({
                 "kiosk_id": r.get("kiosk_id"),
-                "started": int(r.get("started", 0) or 0),           # Fixed label
-                "completed": sessions_completed,                    # Fixed label
-                "abandoned": int(r.get("abandoned", 0) or 0),       # Fixed label
+                "started": sessions_started,
+                "completed": sessions_completed,
+                "abandoned": sessions_abandoned,
                 "restart_clicks": restart_clicks,
                 "restart_rate": restart_rate,
-                "avg_completed_ms": float(r.get("avg_completed_ms")) if r.get("avg_completed_ms") else None,
-                "avg_abandoned_ms": float(r.get("avg_abandoned_ms")) if r.get("avg_abandoned_ms") else None,
+                "avg_ms": None, # Fills a missing slot in your React Row type
+                "avg_completed_ms": float(r.get("avg_completed_ms")) if r.get("avg_completed_ms") is not None else None,
+                "avg_abandoned_ms": float(r.get("avg_abandoned_ms")) if r.get("avg_abandoned_ms") is not None else None,
                 "download_app_clicks": int(r.get("download_app_clicks") or 0),
                 "click_location_clicks": int(r.get("click_location_clicks") or 0),
                 "back_to_map_sessions": int(r.get("back_to_map_sessions") or 0),
-                "avg_easter_eggs": float(r.get("avg_easter_eggs")) if r.get("avg_easter_eggs") else None,
-                "avg_abandoned_screen_depth": float(r.get("avg_screen_depth")) if r.get("avg_screen_depth") else None, # Fixed label
+                "avg_easter_eggs": float(r.get("avg_easter_eggs")) if r.get("avg_easter_eggs") is not None else None,
+                "avg_abandoned_screen_depth": float(r.get("avg_screen_depth")) if r.get("avg_screen_depth") is not None else None,
                 "poi_clicks": {
                     "Priority Pass": int(r.get("poi_1") or 0),
                     "Barcode Booth": int(r.get("poi_2") or 0),
