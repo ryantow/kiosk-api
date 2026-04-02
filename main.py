@@ -306,6 +306,7 @@ def metrics_by_kiosk(
             SUM((meta->>'click_location_clicks')::numeric) AS click_location_clicks,
             SUM((meta->>'back_to_map_clicks')::numeric) AS back_to_map_sessions,
             AVG((meta->>'easter_eggs')::numeric) AS avg_easter_eggs,
+            AVG((meta->>'average_depth')::numeric) AS avg_screen_depth,
             SUM((meta->'poi_clicks'->>'Priority Pass')::numeric) AS poi_1,
             SUM((meta->'poi_clicks'->>'Barcode Booth')::numeric) AS poi_2,
             SUM((meta->'poi_clicks'->>'Support Spotlight')::numeric) AS poi_3,
@@ -323,15 +324,32 @@ def metrics_by_kiosk(
         
         result = []
         for r in rows:
-            r_dict = dict(r)
-            r_dict["poi_clicks"] = {
-                "Priority Pass": int(r_dict.pop("poi_1") or 0),
-                "Barcode Booth": int(r_dict.pop("poi_2") or 0),
-                "Support Spotlight": int(r_dict.pop("poi_3") or 0),
-                "Self Service Station": int(r_dict.pop("poi_4") or 0),
-                "Cash Concession": int(r_dict.pop("poi_5") or 0),
-            }
-            result.append(r_dict)
+            sessions_completed = int(r.get("completed", 0) or 0)
+            restart_clicks = int(r.get("restart_clicks", 0) or 0)
+            restart_rate = (float(restart_clicks) / float(sessions_completed)) if sessions_completed else 0.0
+
+            result.append({
+                "kiosk_id": r.get("kiosk_id"),
+                "sessions_started": int(r.get("started", 0) or 0),
+                "sessions_completed": sessions_completed,
+                "sessions_abandoned": int(r.get("abandoned", 0) or 0),
+                "restart_clicks": restart_clicks,
+                "restart_rate": restart_rate,
+                "avg_completed_ms": float(r.get("avg_completed_ms")) if r.get("avg_completed_ms") else None,
+                "avg_abandoned_ms": float(r.get("avg_abandoned_ms")) if r.get("avg_abandoned_ms") else None,
+                "download_app_clicks": int(r.get("download_app_clicks") or 0),
+                "click_location_clicks": int(r.get("click_location_clicks") or 0),
+                "back_to_map_sessions": int(r.get("back_to_map_sessions") or 0),
+                "avg_easter_eggs": float(r.get("avg_easter_eggs")) if r.get("avg_easter_eggs") else None,
+                "avg_screen_depth": float(row.get("avg_screen_depth")) if row.get("avg_screen_depth") else None,
+                "poi_clicks": {
+                    "Priority Pass": int(r.get("poi_1") or 0),
+                    "Barcode Booth": int(r.get("poi_2") or 0),
+                    "Support Spotlight": int(r.get("poi_3") or 0),
+                    "Self Service Station": int(r.get("poi_4") or 0),
+                    "Cash Concession": int(r.get("poi_5") or 0),
+                }
+            })
             
         return result
 
