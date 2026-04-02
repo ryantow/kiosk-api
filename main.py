@@ -147,7 +147,7 @@ def abandon_session(payload: AbandonSessionIn):
         return {"ok": True, "session_id": payload.session_id}
 
 # ----- Sessions -----
-@app.post("/session/start", response_model=StartSessionOut, dependencies=[Depends(require_api_key)])
+@app.post("/session/start", dependencies=[Depends(require_api_key)])
 def start_session(payload: StartSessionIn):
     with pool.connection() as conn, conn.cursor() as cur:
         cur.execute("SELECT 1 FROM kiosk_locations WHERE kiosk_id = %s;", (payload.kiosk_id,))
