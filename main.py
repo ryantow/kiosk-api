@@ -108,6 +108,7 @@ def start_session(payload: StartSessionIn):
             """,
             (payload.session_id, payload.kiosk_id, payload.app_version),
         )
+        conn.commit()
         return {"ok": True, "session_id": payload.session_id}
 
 @app.post("/session/complete", dependencies=[Depends(require_api_key)])
@@ -126,6 +127,7 @@ def complete_session(payload: CompleteSessionIn):
             """,
             (payload.session_id, payload.kiosk_id, payload.client_ms, json.dumps(payload.meta) if payload.meta else None),
         )
+        conn.commit()
         return {"ok": True, "session_id": payload.session_id}
 
 @app.post("/session/abandon", dependencies=[Depends(require_api_key)])
@@ -144,6 +146,7 @@ def abandon_session(payload: AbandonSessionIn):
             """,
             (payload.session_id, payload.kiosk_id, payload.client_ms, json.dumps(payload.meta) if payload.meta else None),
         )
+        conn.commit()
         return {"ok": True, "session_id": payload.session_id}
 
 @app.post("/session/restart", dependencies=[Depends(require_api_key)])
@@ -159,6 +162,7 @@ def restart_session(payload: RestartSessionIn):
             """,
             (payload.session_id,)
         )
+        conn.commit()
         return {"ok": True, "session_id": payload.session_id}
 
 # ------ Kiosks endpoint ------
