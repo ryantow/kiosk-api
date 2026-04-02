@@ -48,7 +48,7 @@ pool = ConnectionPool(
     conninfo=DATABASE_URL,
     min_size=0,
     max_size=5,
-    kwargs={"row_factory": dict_row},
+    kwargs={"row_factory": dict_row, "autocommit": True},
 )
 
 # -----------------------------
@@ -160,7 +160,7 @@ def restart_session(payload: RestartSessionIn):
             (payload.session_id,)
         )
         return {"ok": True, "session_id": payload.session_id}
-        
+
 # ------ Kiosks endpoint ------
 @app.get("/kiosks", dependencies=[Depends(require_api_key)])
 def get_kiosks():
