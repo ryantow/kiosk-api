@@ -254,9 +254,11 @@ def metrics_by_kiosk(
             COUNT(*) FILTER (WHERE completed_at IS NOT NULL) AS completed,
             COUNT(*) FILTER (WHERE abandoned_at IS NOT NULL) AS abandoned,
             SUM(COALESCE(restart_clicks,0)) AS restart_clicks,
-            AVG(COALESCE(client_ms, EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)) FILTER (WHERE completed_at IS NOT NULL) AS avg_completed_ms,
-            AVG(COALESCE(client_ms, EXTRACT(EPOCH FROM (abandoned_at - started_at)) * 1000)) FILTER (WHERE abandoned_at IS NOT NULL) AS avg_abandoned_ms,
-            SUM((meta->>'download_app_clicks')::numeric) AS download_app_clicks,
+           AVG(COALESCE(client_ms, EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000)) 
+    FILTER (WHERE completed_at IS NOT NULL AND COALESCE(client_ms, EXTRACT(EPOCH FROM (completed_at - started_at)) * 1000) < 1800000) AS avg_completed_ms,
+    
+AVG(COALESCE(client_ms, EXTRACT(EPOCH FROM (abandoned_at - started_at)) * 1000)) 
+    FILTER (WHERE abandoned_at IS NOT NULL AND COALESCE(client_ms, EXTRACT(EPOCH FROM (abandoned_at - started_at)) * 1000) < 1800000) AS avg_abandoned_ms,SUM((meta->>'download_app_clicks')::numeric) AS download_app_clicks,
             SUM((meta->>'click_location_clicks')::numeric) AS click_location_clicks,
             SUM((meta->>'back_to_map_clicks')::numeric) AS back_to_map_sessions,
             AVG((meta->>'easter_eggs')::numeric) AS avg_easter_eggs,
